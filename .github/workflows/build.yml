@@ -8,18 +8,8 @@ on:
 
 jobs:
   macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-13
-            arch: x86_64
-            label: Intel
-          - runner: macos-14
-            arch: aarch64
-            label: AppleSilicon
-    runs-on: ${{ matrix.runner }}
-    name: macOS ${{ matrix.label }} (${{ matrix.arch }})
+    runs-on: macos-14
+    name: macOS Apple Silicon
 
     steps:
       - uses: actions/checkout@v4
@@ -43,11 +33,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -ex
-          case "${{ matrix.arch }}" in
-            x86_64)  ASSET="Xray-macos-64.zip" ;;
-            aarch64) ASSET="Xray-macos-arm64-v8a.zip" ;;
-            *) echo "Unknown arch ${{ matrix.arch }}"; exit 1 ;;
-          esac
+          ASSET="Xray-macos-arm64-v8a.zip"
           URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/XTLS/Xray-core/releases/latest \
             | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='$ASSET'))")
@@ -65,7 +51,7 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: Drift-macOS-${{ matrix.label }}-${{ matrix.arch }}
+          name: Drift-macOS-AppleSilicon
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 30
