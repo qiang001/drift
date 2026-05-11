@@ -1,0 +1,8 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/binaries/xray/xray
+src-tauri/binaries/xray/xray.exe
+src-tauri/binaries/xray/geoip.dat
+src-tauri/binaries/xray/geosite.dat
+.DS_Store
