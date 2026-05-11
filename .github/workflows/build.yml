@@ -34,11 +34,27 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Install npm deps (also fetches xray binary)
-        run: npm ci
+      - name: Install npm deps
+        run: npm ci --ignore-scripts
+
+      - name: Fetch xray binary (explicit, with verification)
+        run: |
+          node scripts/fetch-xray.mjs
+          echo "--- src-tauri/binaries/xray/ ---"
+          ls -la src-tauri/binaries/xray/
+          test -f src-tauri/binaries/xray/xray || { echo "::error::xray binary missing after fetch"; exit 1; }
+          chmod +x src-tauri/binaries/xray/xray
+          file src-tauri/binaries/xray/xray
 
       - name: Build Tauri app
         run: npm run tauri build
+
+      - name: Verify xray ended up in bundle
+        run: |
+          APP=$(find src-tauri/target/release/bundle/macos -name "*.app" | head -1)
+          echo "App: $APP"
+          ls -la "$APP/Contents/Resources/binaries/xray/" || true
+          find "$APP/Contents/Resources" -name "xray" -type f
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
