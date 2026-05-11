@@ -34,27 +34,38 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Install npm deps
-        run: npm ci --ignore-scripts
+      - name: Install npm deps (postinstall runs fetch-xray)
+        run: npm ci
 
-      - name: Fetch xray binary (explicit, with verification)
+      - name: Verify xray binary downloaded
+        shell: bash
         run: |
-          node scripts/fetch-xray.mjs
           echo "--- src-tauri/binaries/xray/ ---"
           ls -la src-tauri/binaries/xray/
-          test -f src-tauri/binaries/xray/xray || { echo "::error::xray binary missing after fetch"; exit 1; }
+          if [ ! -f src-tauri/binaries/xray/xray ]; then
+            echo "xray missing — running fetch-xray manually"
+            node scripts/fetch-xray.mjs
+            ls -la src-tauri/binaries/xray/
+          fi
+          test -f src-tauri/binaries/xray/xray
           chmod +x src-tauri/binaries/xray/xray
           file src-tauri/binaries/xray/xray
 
       - name: Build Tauri app
         run: npm run tauri build
 
-      - name: Verify xray ended up in bundle
+      - name: List bundle contents
+        if: always()
+        shell: bash
         run: |
-          APP=$(find src-tauri/target/release/bundle/macos -name "*.app" | head -1)
+          APP=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d 2>/dev/null | head -1)
           echo "App: $APP"
-          ls -la "$APP/Contents/Resources/binaries/xray/" || true
-          find "$APP/Contents/Resources" -name "xray" -type f
+          if [ -n "$APP" ]; then
+            echo "--- Resources/ ---"
+            ls -la "$APP/Contents/Resources/" || true
+            echo "--- find xray ---"
+            find "$APP/Contents/Resources" -name "xray*" -o -name "geo*" || true
+          fi
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
