@@ -7,7 +7,9 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 const LOG_CAP: usize = 500;
 
@@ -21,7 +23,8 @@ pub enum Status {
 }
 
 pub struct XrayHandle {
-    child: Child,
+    stop_tx: Option<oneshot::Sender<()>>,
+    watcher: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -126,7 +129,39 @@ pub async fn spawn(
         });
     }
 
-    Ok(XrayHandle { child })
+    // Watcher: select between stop signal and child exit. If xray dies on its own,
+    // mark Failed (with last log line as hint) so the UI doesn't keep showing Connected.
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let watcher_state = state.clone();
+    let watcher = tokio::spawn(async move {
+        tokio::select! {
+            _ = stop_rx => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+            }
+            res = child.wait() => {
+                let last_log = watcher_state
+                    .logs
+                    .lock()
+                    .iter()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| "(no output)".into());
+                let detail = match res {
+                    Ok(status) => format!("xray exited ({status}): {last_log}"),
+                    Err(e) => format!("xray wait failed: {e}"),
+                };
+                watcher_state.push_log(format!("[supervisor] {detail}"));
+                watcher_state.set_status(Status::Failed(detail));
+            }
+        }
+    });
+
+    Ok(XrayHandle {
+        stop_tx: Some(stop_tx),
+        watcher: Some(watcher),
+    })
 }
 
 fn spawn_log_pump<R>(stream: R, state: XrayState, tag: &'static str)
@@ -142,16 +177,23 @@ where
 }
 
 impl XrayHandle {
-    /// Stop the process. Best-effort: kill, await exit.
+    /// Stop the process. Signals the watcher to kill xray, then awaits cleanup.
     pub async fn stop(mut self) {
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(w) = self.watcher.take() {
+            let _ = w.await;
+        }
     }
 }
 
 impl Drop for XrayHandle {
     fn drop(&mut self) {
-        let _ = self.child.start_kill();
+        // Best-effort: signal the watcher; it owns the Child and will kill it.
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
     }
 }
 
