@@ -53,8 +53,20 @@ pub fn build(link: &VlessLink) -> Value {
             { "tag": "block", "protocol": "blackhole" }
         ],
         "routing": {
-            "domainStrategy": "AsIs",
+            // Resolve a domain only when the rule needs an IP match — keeps DNS
+            // light but lets the geoip:cn rule still catch CN-hosted endpoints
+            // whose domain didn't show up in geosite:cn.
+            "domainStrategy": "IPIfNonMatch",
             "rules": [
+                // Block bittorrent on the proxied side — cheap defense against
+                // a single user saturating the node.
+                { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" },
+                // CN apps (DingTalk, WeChat, Alipay, etc.) blocklist non-CN IPs
+                // for risk control. Route them direct so they see the user's
+                // real CN IP and behave normally.
+                { "type": "field", "domain": ["geosite:cn", "geosite:private"], "outboundTag": "direct" },
+                { "type": "field", "ip": ["geoip:cn", "geoip:private"], "outboundTag": "direct" },
+                // Everything else through the VLESS tunnel.
                 { "type": "field", "outboundTag": "proxy", "network": "tcp,udp" }
             ]
         }
