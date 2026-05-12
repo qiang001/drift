@@ -9,6 +9,9 @@ const DEFAULT_URL =
 const POLL_MS = 1000;
 const PING_DELAYS_MS = [1000, 3000, 5000, 7000];
 const PING_URL = "https://www.gstatic.com/generate_204";
+// xray running locally doesn't prove the remote server is reachable, so we
+// fall back to consecutive ping failures as the real connectivity signal.
+const PING_FAIL_THRESHOLD = 3;
 
 interface Copy {
   title: string;
@@ -21,17 +24,17 @@ function latencyTier(ms: number): "fast" | "ok" | "slow" {
   return "slow";
 }
 
-function copyFor(s: Status, latency: number | null): Copy {
+function copyFor(s: Status, latency: number | null, pingFails: number): Copy {
   switch (s.kind) {
     case "Disconnected":
       return { title: "未连接", subtitle: "点击下方按钮，建立加密连接" };
     case "Connecting":
       return { title: "正在连接…", subtitle: "握手中，请稍候" };
     case "Connected":
-      return {
-        title: "已连接",
-        subtitle: latency != null ? `${latency} ms` : "测速中…",
-      };
+      if (latency != null) return { title: "已连接", subtitle: `${latency} ms` };
+      if (pingFails >= PING_FAIL_THRESHOLD)
+        return { title: "节点不可达", subtitle: "服务器无响应，请检查节点状态" };
+      return { title: "已连接", subtitle: "测速中…" };
     case "Failed":
       return { title: "连接失败", subtitle: s.detail };
   }
@@ -43,6 +46,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
+  const [pingFails, setPingFails] = useState(0);
 
   useEffect(() => {
     api.envCheck().then(setEnv).catch(() => {});
@@ -71,6 +75,7 @@ export default function App() {
   useEffect(() => {
     if (status.kind !== "Connected") {
       setLatency(null);
+      setPingFails(0);
       return;
     }
     let cancelled = false;
@@ -90,8 +95,12 @@ export default function App() {
         });
         if (cancelled) return;
         setLatency(Math.round(performance.now() - start));
+        setPingFails(0);
       } catch {
-        if (!cancelled) setLatency(null);
+        if (!cancelled) {
+          setLatency(null);
+          setPingFails((n) => n + 1);
+        }
       } finally {
         window.clearTimeout(t);
       }
@@ -140,7 +149,9 @@ export default function App() {
   };
 
   const isOn = status.kind === "Connected" || status.kind === "Connecting";
-  const { title, subtitle } = copyFor(status, latency);
+  const unreachable =
+    status.kind === "Connected" && latency == null && pingFails >= PING_FAIL_THRESHOLD;
+  const { title, subtitle } = copyFor(status, latency, pingFails);
 
   return (
     <main className="app">
@@ -155,11 +166,19 @@ export default function App() {
         <Art state={isOn ? "on" : "off"} />
       </div>
 
-      <h1 className={`title title-${status.kind.toLowerCase()}`}>{title}</h1>
+      <h1
+        className={`title title-${
+          unreachable ? "failed" : status.kind.toLowerCase()
+        }`}
+      >
+        {title}
+      </h1>
       <p
         className={
           status.kind === "Connected" && latency != null
             ? `subtitle subtitle-${latencyTier(latency)}`
+            : unreachable
+            ? "subtitle subtitle-slow"
             : "subtitle"
         }
       >
