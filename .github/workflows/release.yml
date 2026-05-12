@@ -1,8 +1,7 @@
-name: Build
+name: Release
 
 on:
   push:
-    branches: [main, master]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -119,9 +118,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  release:
+  publish:
     needs: [macos, windows]
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     name: Publish GitHub Release
     permissions:
