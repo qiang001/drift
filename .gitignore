@@ -1,8 +1,6 @@
 node_modules
 dist
 src-tauri/target
-src-tauri/binaries/xray/xray
-src-tauri/binaries/xray/xray.exe
-src-tauri/binaries/xray/geoip.dat
-src-tauri/binaries/xray/geosite.dat
+# xray binaries are fetched per-platform at install/CI time — never commit anything in here.
+src-tauri/binaries/xray/*
 .DS_Store

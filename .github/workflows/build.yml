@@ -38,6 +38,8 @@ jobs:
             https://api.github.com/repos/XTLS/Xray-core/releases/latest \
             | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='$ASSET'))")
           echo "Asset URL: $URL"
+          # Wipe any historical pollution before extracting the platform-specific archive.
+          rm -rf src-tauri/binaries/xray
           mkdir -p src-tauri/binaries/xray
           curl -fsSL "$URL" -o /tmp/xray.zip
           unzip -o /tmp/xray.zip -d src-tauri/binaries/xray/
@@ -47,6 +49,13 @@ jobs:
 
       - name: Build Tauri app
         run: npm run tauri build
+
+      - name: Verify ad-hoc signature on bundled .app
+        shell: bash
+        run: |
+          set -ex
+          APP="src-tauri/target/release/bundle/macos/Drift.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
@@ -90,6 +99,8 @@ jobs:
           $release = Invoke-RestMethod "https://api.github.com/repos/XTLS/Xray-core/releases/latest" -Headers $headers
           $url = ($release.assets | Where-Object { $_.name -eq $asset }).browser_download_url
           Write-Host "Asset URL: $url"
+          # Wipe any historical pollution before extracting the platform-specific archive.
+          if (Test-Path "src-tauri/binaries/xray") { Remove-Item -Recurse -Force "src-tauri/binaries/xray" }
           New-Item -ItemType Directory -Force -Path "src-tauri/binaries/xray" | Out-Null
           Invoke-WebRequest $url -OutFile "$env:TEMP/xray.zip"
           Expand-Archive -Path "$env:TEMP/xray.zip" -DestinationPath "src-tauri/binaries/xray" -Force
