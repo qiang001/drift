@@ -1,6 +1,6 @@
 [package]
 name = "vpn-client"
-version = "0.1.8"
+version = "0.1.9"
 description = "VLESS VPN client (Xray-core under the hood)"
 authors = ["you"]
 edition = "2021"
