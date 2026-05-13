@@ -112,8 +112,47 @@ body,
 .subtitle-ok   { color: #ff9500; font-weight: 500; }
 .subtitle-slow { color: #ff3b30; font-weight: 500; }
 
+.nodes {
+  margin-top: 28px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border-radius: 980px;
+}
+
+.node-pill {
+  min-width: 84px;
+  padding: 7px 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 980px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.node-pill:hover:not(:disabled):not(.node-pill-active) {
+  color: var(--fg);
+}
+
+.node-pill-active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.node-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .cta {
-  margin-top: 32px;
+  margin-top: 18px;
   width: 100%;
   max-width: 280px;
   border: 1px solid transparent;
