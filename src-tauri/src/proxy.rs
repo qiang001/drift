@@ -1,7 +1,15 @@
 // System proxy: Windows uses HKCU Internet Settings + WM_SETTINGCHANGE broadcast;
-// macOS uses `networksetup` against every active network service. ProxyGuard restores
-// the prior state on Drop — covers normal disconnect, app exit, and panic, which is
-// critical for not stranding the user behind a dead proxy.
+// macOS uses `networksetup` against every active network service.
+//
+// Windows: on disconnect we FORCE the proxy off — we do NOT restore the prior
+// state. Reason: if Drift crashed or was task-killed last run, the registry
+// still says "ProxyEnable=1, ProxyServer=127.0.0.1:10809" (dead). Reading that
+// as "prior state" and restoring to it on disconnect strands the user behind a
+// dead proxy. Force-off is the right semantic for a consumer VPN — users almost
+// never have a manual system proxy configured by hand.
+//
+// macOS: still restores prior state since the same crash-leftover scenario is
+// less common there (the Drop handler is more reliable, no registry to persist).
 
 use anyhow::Result;
 
@@ -22,38 +30,19 @@ mod imp {
 
     const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
-    #[derive(Debug, Clone)]
-    struct PriorState {
-        proxy_enable: u32,
-        proxy_server: Option<String>,
-        proxy_override: Option<String>,
-    }
-
     pub struct ProxyGuard {
-        prior: Option<PriorState>,
         armed: bool,
     }
 
     impl ProxyGuard {
         pub fn set(server: &str, bypass: &str) -> Result<Self> {
-            let prior = read_state().context("read prior proxy state")?;
             write_state(1, Some(server), Some(bypass)).context("apply proxy state")?;
             notify_change();
-            Ok(Self {
-                prior: Some(prior),
-                armed: true,
-            })
+            Ok(Self { armed: true })
         }
 
         pub fn restore(&mut self) -> Result<()> {
-            if let Some(p) = self.prior.take() {
-                write_state(
-                    p.proxy_enable,
-                    p.proxy_server.as_deref(),
-                    p.proxy_override.as_deref(),
-                )?;
-                notify_change();
-            }
+            force_off();
             self.armed = false;
             Ok(())
         }
@@ -65,19 +54,6 @@ mod imp {
                 let _ = self.restore();
             }
         }
-    }
-
-    fn read_state() -> Result<PriorState> {
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let key = hkcu.open_subkey_with_flags(KEY, KEY_READ)?;
-        let proxy_enable: u32 = key.get_value("ProxyEnable").unwrap_or(0);
-        let proxy_server: Option<String> = key.get_value("ProxyServer").ok();
-        let proxy_override: Option<String> = key.get_value("ProxyOverride").ok();
-        Ok(PriorState {
-            proxy_enable,
-            proxy_server,
-            proxy_override,
-        })
     }
 
     fn write_state(enable: u32, server: Option<&str>, bypass: Option<&str>) -> Result<()> {
@@ -101,6 +77,16 @@ mod imp {
             }
         }
         Ok(())
+    }
+
+    fn force_off() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok((key, _)) = hkcu.create_subkey_with_flags(KEY, KEY_WRITE) {
+            let _: std::io::Result<()> = key.set_value("ProxyEnable", &0u32);
+            let _ = key.delete_value("ProxyServer");
+            let _ = key.delete_value("ProxyOverride");
+        }
+        notify_change();
     }
 
     fn notify_change() {
