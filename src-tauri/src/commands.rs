@@ -79,10 +79,11 @@ pub async fn connect(
         if let Some(h) = state.xray.lock().take() {
             tokio::spawn(async move { h.stop().await });
         }
-        state
-            .xray_state
-            .set_status(Status::Failed(format!("system proxy: {e}")));
-        err(e)
+        // {:#} prints the full anyhow chain (e.g. "apply proxy state: 拒绝访问。 (os error 5)")
+        // so the user can tell GPO/AV blocking apart from other failures.
+        let msg = format!("system proxy: {e:#}");
+        state.xray_state.set_status(Status::Failed(msg.clone()));
+        msg
     })?;
     *state.proxy.lock() = Some(guard);
 

@@ -1,7 +1,9 @@
+use crate::config::{HTTP_PORT, SOCKS_PORT};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -84,6 +86,30 @@ pub async fn spawn(
 
     state.clear_logs();
     state.set_status(Status::Connecting);
+
+    // If an inbound port is taken, xray fails with an unreadable
+    // "bind: Only one usage of each socket address". The usual cause is an
+    // orphaned xray left behind by a run that crashed or was task-killed, so
+    // reap ours and re-check; anything still holding the port belongs to other
+    // software and becomes an error the user can act on.
+    if let Some((port, label)) = busy_inbound() {
+        state.push_log(format!(
+            "[supervisor] {} port {} busy — reaping orphaned xray processes",
+            label, port
+        ));
+        reap_orphans(bin, &state);
+
+        if let Some((port, label)) = busy_inbound() {
+            let msg = format!(
+                "{} port {} is already in use by another program \
+                 (another proxy client such as v2rayN or Clash also defaults to \
+                 10808) — close it and try again.",
+                label, port
+            );
+            state.set_status(Status::Failed(msg.clone()));
+            return Err(anyhow!(msg));
+        }
+    }
     state.push_log(format!(
         "[supervisor] starting {} -c {}",
         bin.display(),
@@ -162,6 +188,57 @@ pub async fn spawn(
         stop_tx: Some(stop_tx),
         watcher: Some(watcher),
     })
+}
+
+/// First inbound port that cannot be bound, with a label for messages.
+fn busy_inbound() -> Option<(u16, &'static str)> {
+    [(SOCKS_PORT, "SOCKS"), (HTTP_PORT, "HTTP")]
+        .into_iter()
+        .find(|(port, _)| TcpListener::bind(("127.0.0.1", *port)).is_err())
+}
+
+/// Kill leftover xray processes started from `bin`. Matching on the full
+/// executable path keeps this from touching an unrelated xray the user runs
+/// themselves. Best-effort: failures only mean the port stays busy and the
+/// caller reports that.
+fn reap_orphans(bin: &Path, state: &XrayState) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        // Single-quoted PowerShell literal; '' escapes an embedded quote.
+        let path = bin.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "Get-CimInstance Win32_Process -Filter \"Name='xray.exe'\" | \
+             Where-Object {{ $_.ExecutablePath -eq '{path}' }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+        );
+
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+
+        match out {
+            Ok(o) if o.status.success() => state.push_log("[supervisor] orphan reap done".into()),
+            Ok(o) => state.push_log(format!(
+                "[supervisor] orphan reap failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => state.push_log(format!("[supervisor] orphan reap failed: {e}")),
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let out = std::process::Command::new("pkill")
+            .args(["-f", &bin.to_string_lossy()])
+            .output();
+        if let Err(e) = out {
+            state.push_log(format!("[supervisor] orphan reap failed: {e}"));
+        }
+    }
 }
 
 fn spawn_log_pump<R>(stream: R, state: XrayState, tag: &'static str)

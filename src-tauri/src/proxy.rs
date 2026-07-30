@@ -58,8 +58,11 @@ mod imp {
 
     fn write_state(enable: u32, server: Option<&str>, bypass: Option<&str>) -> Result<()> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu.create_subkey_with_flags(KEY, KEY_WRITE)?;
-        key.set_value("ProxyEnable", &enable)?;
+        let (key, _) = hkcu
+            .create_subkey_with_flags(KEY, KEY_WRITE)
+            .context("open Internet Settings key (blocked by policy/antivirus?)")?;
+        key.set_value("ProxyEnable", &enable)
+            .context("write ProxyEnable")?;
         match server {
             Some(s) => {
                 key.set_value("ProxyServer", &s.to_string())?;
