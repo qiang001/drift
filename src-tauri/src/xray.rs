@@ -100,11 +100,13 @@ pub async fn spawn(
         ));
         reap_orphans(bin, &state);
 
-        if let Some((port, label)) = busy_inbound() {
+        // Windows frees the port a moment after the process dies, so an
+        // immediate re-check can still see it busy.
+        if let Some((port, label)) = wait_inbound_free(Duration::from_secs(3)).await {
             let msg = format!(
                 "{} port {} is already in use by another program \
-                 (another proxy client such as v2rayN or Clash also defaults to \
-                 10808) — close it and try again.",
+                 (another proxy client such as v2rayN or Clash, or another \
+                 copy of Drift, also uses 10808) — close it and try again.",
                 label, port
             );
             state.set_status(Status::Failed(msg.clone()));
@@ -137,6 +139,8 @@ pub async fn spawn(
     }
 
     let mut child = cmd.spawn().context("failed to spawn xray")?;
+    #[cfg(windows)]
+    bind_to_app_lifetime(&child, &state);
 
     let stdout = child.stdout.take().context("missing stdout")?;
     let stderr = child.stderr.take().context("missing stderr")?;
@@ -198,6 +202,67 @@ fn busy_inbound() -> Option<(u16, &'static str)> {
         .find(|(port, _)| TcpListener::bind(("127.0.0.1", *port)).is_err())
 }
 
+/// Poll until both inbound ports are free; returns the one still busy at the deadline.
+async fn wait_inbound_free(timeout: Duration) -> Option<(u16, &'static str)> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let busy = busy_inbound();
+        if busy.is_none() || Instant::now() >= deadline {
+            return busy;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Put xray in a kill-on-close job object whose handle lives as long as Drift.
+/// However Drift exits — quit, crash, task-kill, a `tauri dev` rebuild —
+/// Windows closes the handle and takes xray down with it, instead of leaving
+/// an orphan holding the inbound ports.
+#[cfg(windows)]
+fn bind_to_app_lifetime(child: &tokio::process::Child, state: &XrayState) {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    // HANDLE is a raw pointer (not Sync), so keep it as usize; 0 = creation failed.
+    // Never closed on purpose: process exit closing it is what kills xray.
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return 0;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of_val(&info) as u32,
+        );
+        if ok == 0 {
+            CloseHandle(job);
+            return 0;
+        }
+        job as usize
+    });
+
+    let assigned = match child.raw_handle() {
+        Some(h) if job != 0 => unsafe { AssignProcessToJobObject(job as _, h as _) != 0 },
+        _ => false,
+    };
+    if !assigned {
+        state.push_log(format!(
+            "[supervisor] could not tie xray to app lifetime ({}); it may outlive a crash",
+            std::io::Error::last_os_error()
+        ));
+    }
+}
+
 /// Kill leftover xray processes started from `bin`. Matching on the full
 /// executable path keeps this from touching an unrelated xray the user runs
 /// themselves. Best-effort: failures only mean the port stays busy and the
@@ -208,12 +273,17 @@ fn reap_orphans(bin: &Path, state: &XrayState) {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+        // Tauri canonicalizes the exe path, so `bin` arrives as `\\?\C:\...`
+        // while Win32_Process reports plain `C:\...`; strip the verbatim
+        // prefix or the match never hits. (-eq is already case-insensitive.)
+        let path = bin.to_string_lossy();
+        let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
         // Single-quoted PowerShell literal; '' escapes an embedded quote.
-        let path = bin.to_string_lossy().replace('\'', "''");
+        let path = path.replace('\'', "''");
         let script = format!(
             "Get-CimInstance Win32_Process -Filter \"Name='xray.exe'\" | \
              Where-Object {{ $_.ExecutablePath -eq '{path}' }} | \
-             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }}"
         );
 
         let out = std::process::Command::new("powershell")
@@ -222,7 +292,15 @@ fn reap_orphans(bin: &Path, state: &XrayState) {
             .output();
 
         match out {
-            Ok(o) if o.status.success() => state.push_log("[supervisor] orphan reap done".into()),
+            Ok(o) if o.status.success() => {
+                let pids = String::from_utf8_lossy(&o.stdout);
+                let pids: Vec<&str> = pids.split_whitespace().collect();
+                state.push_log(if pids.is_empty() {
+                    "[supervisor] orphan reap: no xray of ours found".into()
+                } else {
+                    format!("[supervisor] orphan reap: killed pid {}", pids.join(", "))
+                });
+            }
             Ok(o) => state.push_log(format!(
                 "[supervisor] orphan reap failed: {}",
                 String::from_utf8_lossy(&o.stderr).trim()

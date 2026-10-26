@@ -73,7 +73,7 @@ pub async fn connect(
     })?;
     *state.xray.lock() = Some(handle);
 
-    let server = format!("127.0.0.1:{}", config::HTTP_PORT);
+    let server = config::http_proxy_server();
     let guard = ProxyGuard::set(&server, DEFAULT_BYPASS).map_err(|e| {
         // If proxy registry write failed, kill xray to leave a clean state.
         if let Some(h) = state.xray.lock().take() {

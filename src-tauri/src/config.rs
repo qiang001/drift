@@ -7,6 +7,11 @@ pub const HTTP_PORT: u16 = 10809;
 /// successful probe proves the remote node actually carries traffic.
 pub const PROBE_HOST: &str = "cp.cloudflare.com";
 
+/// The system proxy value pointing at our HTTP inbound.
+pub fn http_proxy_server() -> String {
+    format!("127.0.0.1:{HTTP_PORT}")
+}
+
 /// Build a complete Xray config (as JSON Value) from a parsed VLESS link.
 /// Inbounds: SOCKS on 10808 + HTTP on 10809, both bound to 127.0.0.1.
 pub fn build(link: &VlessLink) -> Value {

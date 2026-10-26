@@ -56,6 +56,23 @@ mod imp {
         }
     }
 
+    /// Turn the system proxy off if it is enabled and points at `server`.
+    /// Returns whether it did. A proxy the user or another client set to a
+    /// different address is left alone.
+    pub fn clear_stale(server: &str) -> bool {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let Ok(key) = hkcu.open_subkey(KEY) else {
+            return false;
+        };
+        let enabled = key.get_value::<u32, _>("ProxyEnable").unwrap_or(0) == 1;
+        let current = key.get_value::<String, _>("ProxyServer").unwrap_or_default();
+        if !enabled || current != server {
+            return false;
+        }
+        force_off();
+        true
+    }
+
     fn write_state(enable: u32, server: Option<&str>, bypass: Option<&str>) -> Result<()> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (key, _) = hkcu
@@ -189,6 +206,12 @@ mod imp {
         }
     }
 
+    /// No-op: macOS restores the prior state on disconnect, and a crash there
+    /// rarely leaves the proxy behind (see the header comment).
+    pub fn clear_stale(_server: &str) -> bool {
+        false
+    }
+
     fn networksetup(args: &[&str]) -> Result<String> {
         let out = Command::new(NETWORKSETUP)
             .args(args)
@@ -281,6 +304,9 @@ mod imp {
             Ok(())
         }
     }
+    pub fn clear_stale(_server: &str) -> bool {
+        false
+    }
 }
 
-pub use imp::ProxyGuard;
+pub use imp::{clear_stale, ProxyGuard};
