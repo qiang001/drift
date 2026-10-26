@@ -16,7 +16,8 @@
         "width": 380,
         "height": 615,
         "resizable": false,
-        "maximizable": false
+        "maximizable": false,
+        "backgroundColor": "#05060f"
       }
     ],
     "security": {

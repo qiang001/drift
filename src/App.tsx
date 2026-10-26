@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { EnvCheck, Status } from "./types";
 import { Art } from "./Art";
+import { Starfield } from "./Starfield";
 
 interface Node {
   id: string;
@@ -204,6 +205,7 @@ export default function App() {
 
   return (
     <main className="app">
+      <Starfield active={status.kind === "Connected"} />
       {env && !env.xray_present && (
         <div className="banner">
           内核未就绪：缺少 <code>xray</code>，请在项目根目录运行

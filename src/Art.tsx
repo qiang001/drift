@@ -1,67 +1,93 @@
-import type { CSSProperties } from "react";
-
 type Props = { state: "on" | "off" };
 
-const CELL = 10;
+// Saturn-style ringed planet. Off: dim planet and ring. On: both light up, the
+// glow breathes and a small moon orbits outside the ring.
+//
+// Everything ring-related lives in one tilted frame where the rings are
+// axis-aligned ellipses centered on (100,100). Each ring is drawn in two
+// halves around the planet — back (y < 100, hidden behind the planet) and
+// front (y > 100, drawn over it) — which gives correct occlusion. Light comes
+// from the upper left.
 
-// Apple-style monochrome palette
-const C_NOSE = "#1d1d1f";
-const C_BODY = "#ffffff";
-const C_LOW  = "#a1a1a6";
-const C_BAND = "#1d1d1f";
-const C_FIN  = "#3a3a3c";
-const C_WIN  = "#6e6e73";
+const TILT = -18;
+const K = 0.3; // ry / rx: how open the rings look
+const MOON_RX = 104;
 
-type Cell = { x: number; y: number; fill: string };
+type Half = "back" | "front";
 
-// Rocket as a 4-wide stack of 10px cells, centered around x=100
-const CELLS: Cell[] = [
-  // ── nose (1, 2, 3 widening pyramid) ──
-  { x: 95, y: 30, fill: C_NOSE },
-  { x: 90, y: 40, fill: C_NOSE }, { x: 100, y: 40, fill: C_NOSE },
-  { x: 85, y: 50, fill: C_NOSE }, { x: 95, y: 50, fill: C_NOSE }, { x: 105, y: 50, fill: C_NOSE },
+function arc(rx: number, half: Half, dy = 0) {
+  const ry = rx * K;
+  const [from, to] = half === "back" ? [100 - rx, 100 + rx] : [100 + rx, 100 - rx];
+  return `M${from},${100 + dy} A${rx},${ry} 0 0,1 ${to},${100 + dy}`;
+}
 
-  // ── upper body (cream) ──
-  { x: 80, y: 60, fill: C_BODY }, { x: 90, y: 60, fill: C_BODY }, { x: 100, y: 60, fill: C_BODY }, { x: 110, y: 60, fill: C_BODY },
-  // window row
-  { x: 80, y: 70, fill: C_BODY }, { x: 90, y: 70, fill: C_WIN  }, { x: 100, y: 70, fill: C_WIN  }, { x: 110, y: 70, fill: C_BODY },
-  { x: 80, y: 80, fill: C_BODY }, { x: 90, y: 80, fill: C_BODY }, { x: 100, y: 80, fill: C_BODY }, { x: 110, y: 80, fill: C_BODY },
+function ellipse(rx: number) {
+  const ry = rx * K;
+  return `M${100 - rx},100 A${rx},${ry} 0 1,1 ${100 + rx},100 A${rx},${ry} 0 1,1 ${100 - rx},100`;
+}
 
-  // ── decorative band ──
-  { x: 80, y: 90, fill: C_BAND }, { x: 90, y: 90, fill: C_BAND }, { x: 100, y: 90, fill: C_BAND }, { x: 110, y: 90, fill: C_BAND },
-
-  // ── lower body (clay) ──
-  { x: 80, y: 100, fill: C_LOW }, { x: 90, y: 100, fill: C_LOW }, { x: 100, y: 100, fill: C_LOW }, { x: 110, y: 100, fill: C_LOW },
-  { x: 80, y: 110, fill: C_LOW }, { x: 90, y: 110, fill: C_LOW }, { x: 100, y: 110, fill: C_LOW }, { x: 110, y: 110, fill: C_LOW },
-  { x: 80, y: 120, fill: C_LOW }, { x: 90, y: 120, fill: C_LOW }, { x: 100, y: 120, fill: C_LOW }, { x: 110, y: 120, fill: C_LOW },
-
-  // ── fins (L-shaped, flaring at bottom) ──
-  { x: 70, y: 110, fill: C_FIN }, { x: 70, y: 120, fill: C_FIN }, { x: 60, y: 120, fill: C_FIN },
-  { x: 120, y: 110, fill: C_FIN }, { x: 120, y: 120, fill: C_FIN }, { x: 130, y: 120, fill: C_FIN },
-
-  // ── booster nubs ──
-  { x: 90, y: 130, fill: C_BAND }, { x: 100, y: 130, fill: C_BAND },
-];
-
-// stable pseudo-random so scatter looks organic but doesn't shift between renders
-function rand(seed: number): number {
-  const x = Math.sin(seed * 12.9898) * 43758.5453;
+// Deterministic fine banding.
+function grain(i: number) {
+  const x = Math.sin(i * 91.7) * 43758.5453;
   return x - Math.floor(x);
 }
 
-const BLOCKS = CELLS.map((c, i) => {
-  const tx = 12 + rand(i + 1) * 174;          // 12..186
-  const ty = 142 + (rand(i + 137) - 0.5) * 16; // 134..150
-  const rot = (rand(i + 271) - 0.5) * 120;     // -60..60
-  return {
-    ...c,
-    sx: Math.round(tx - c.x),
-    sy: Math.round(ty - c.y),
-    sr: Math.round(rot),
-  };
-});
+// Radial opacity profile modeled on Saturn's rings: faint C ring, bright B
+// ring, the dark Cassini Division, the A ring with the Encke Gap, and the
+// thin F ring outside.
+const STEP = 0.8;
+const BANDS: { rx: number; a: number }[] = [];
+for (let i = 0, rx = 52; rx <= 91.6; i++, rx += STEP) {
+  const g = grain(i);
+  let a = 0;
+  if (rx < 60) a = 0.1 + g * 0.08;
+  else if (rx < 73.5) a = 0.62 + 0.18 * Math.sin(((rx - 60) / 13.5) * Math.PI) + g * 0.14;
+  else if (rx < 76.5) a = 0.04;
+  else if (rx < 88) a = rx > 84.6 && rx < 85.8 ? 0.07 : 0.4 + g * 0.16;
+  else if (rx > 90.6) a = 0.32;
+  if (a > 0) BANDS.push({ rx, a });
+}
+const RING_IN = 52;
+const RING_OUT = 92;
+
+function RingHalf({ half }: { half: Half }) {
+  return (
+    <g transform={`rotate(${TILT} 100 100)`} clipPath={`url(#clip-${half})`}>
+      <g className="ring">
+        {BANDS.map((b) => (
+          <path
+            key={b.rx}
+            d={arc(b.rx, half)}
+            stroke="url(#ring-light)"
+            strokeOpacity={b.a}
+            strokeWidth={STEP * 1.2}
+            fill="none"
+          />
+        ))}
+        {/* the planet's shadow falling across the rings behind it */}
+        {half === "back" && (
+          <g clipPath="url(#clip-annulus)">
+            <circle cx="108" cy="99" r="42" fill="#05060f" opacity="0.42" />
+          </g>
+        )}
+      </g>
+    </g>
+  );
+}
+
+function MoonHalf({ half, on }: { half: Half; on: boolean }) {
+  if (!on) return null;
+  return (
+    <g transform={`rotate(${TILT} 100 100)`} clipPath={`url(#clip-${half})`}>
+      <circle className="moon" r="3.4" fill="url(#moon-grad)">
+        <animateMotion dur="14s" repeatCount="indefinite" path={ellipse(MOON_RX)} />
+      </circle>
+    </g>
+  );
+}
 
 export function Art({ state }: Props) {
+  const on = state === "on";
   return (
     <svg
       viewBox="0 0 200 200"
@@ -69,126 +95,102 @@ export function Art({ state }: Props) {
       height="170"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
+      overflow="visible"
     >
       <style>{`
-        .block {
-          transition: transform 1.2s cubic-bezier(0.34, 1.4, 0.64, 1);
-          transform-origin: center;
-          transform-box: fill-box;
-          will-change: transform;
-        }
-        .scene-off .block {
-          transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
-        }
-        .scene-on .block {
-          transform: translate(0, 0) rotate(0deg);
+        .planet, .ring, .glow { transition: filter 1.2s ease, opacity 1.2s ease; }
+        .scene-off .planet { filter: saturate(0.45) brightness(0.55); }
+        .scene-off .ring   { opacity: 0.5; filter: saturate(0.5) brightness(0.7); }
+        .scene-off .glow   { opacity: 0.3; }
+        .scene-on  .glow   { animation: breathe 3.2s ease-in-out infinite; }
+
+        @keyframes breathe {
+          0%, 100% { opacity: 0.7; }
+          50%      { opacity: 1; }
         }
 
-        @keyframes bob {
+        .body { transform-box: fill-box; transform-origin: center; }
+        .scene-on .body { animation: float 4.8s ease-in-out infinite; }
+        @keyframes float {
           0%, 100% { transform: translateY(0); }
           50%      { transform: translateY(-4px); }
         }
-        .bob { transform-origin: center; transform-box: fill-box; }
-        .scene-on .bob { animation: bob 2.4s ease-in-out 1.2s infinite; }
 
-        @keyframes flame-a {
-          0%, 100% { transform: scaleY(1); opacity: 1; }
-          50%      { transform: scaleY(1.18); opacity: 0.85; }
-        }
-        @keyframes flame-b {
-          0%, 100% { transform: scaleY(1); opacity: 0.85; }
-          50%      { transform: scaleY(0.85); opacity: 1; }
-        }
-        .flame-a, .flame-b { transform-origin: top center; transform-box: fill-box; }
-        .scene-on .flame-a { animation: flame-a 0.32s ease-in-out 1.2s infinite; }
-        .scene-on .flame-b { animation: flame-b 0.42s ease-in-out 1.2s infinite; }
-
-        @keyframes star {
-          0%   { transform: translateY(-30px); opacity: 0; }
-          15%  { opacity: 0.65; }
-          85%  { opacity: 0.65; }
-          100% { transform: translateY(190px); opacity: 0; }
-        }
-        .scene-on .star { animation: star 2.4s linear 1.3s infinite; }
-
-        @keyframes puff {
-          0%   { transform: translate(0,0) scale(0.6); opacity: 0; }
-          25%  { opacity: 0.55; }
-          100% { transform: translate(var(--dx, 0px), 60px) scale(1.6); opacity: 0; }
-        }
-        .puff { transform-origin: center; transform-box: fill-box; }
-        .scene-on .puff { animation: puff 1.6s ease-out 1.3s infinite; }
-
-        .fx { opacity: 0; transition: opacity 0.5s ease 1s; }
-        .scene-on .fx { opacity: 1; }
-        .scene-off .fx { transition: opacity 0.3s ease; }
-
-        .ground { opacity: 0; transition: opacity 0.5s ease; }
-        .scene-off .ground { opacity: 1; transition: opacity 0.5s ease 0.6s; }
+        .moon { animation: moon-in 1s ease both; }
+        @keyframes moon-in { from { opacity: 0; } to { opacity: 1; } }
       `}</style>
 
+      <defs>
+        <radialGradient id="glow-grad">
+          <stop offset="0.35" stopColor="#7d7aff" stopOpacity="0.5" />
+          <stop offset="1" stopColor="#7d7aff" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="planet-grad" cx="0.36" cy="0.32" r="0.75">
+          <stop offset="0" stopColor="#dfe6ff" />
+          <stop offset="0.3" stopColor="#9a95ff" />
+          <stop offset="0.68" stopColor="#3f32a3" />
+          <stop offset="1" stopColor="#140f38" />
+        </radialGradient>
+        <radialGradient id="shade-grad" cx="0.3" cy="0.25" r="0.95">
+          <stop offset="0.5" stopColor="#05060f" stopOpacity="0" />
+          <stop offset="1" stopColor="#05060f" stopOpacity="0.8" />
+        </radialGradient>
+        <radialGradient id="rim-grad" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0.88" stopColor="#b9c6ff" stopOpacity="0" />
+          <stop offset="1" stopColor="#b9c6ff" stopOpacity="0.5" />
+        </radialGradient>
+        {/* rings: cool silver-blue ice, lit from the left */}
+        <linearGradient id="ring-light" gradientUnits="userSpaceOnUse" x1="8" y1="0" x2="192" y2="0">
+          <stop offset="0" stopColor="#f4f6ff" />
+          <stop offset="0.45" stopColor="#c3cbf2" />
+          <stop offset="1" stopColor="#555b8c" />
+        </linearGradient>
+        <radialGradient id="moon-grad" cx="0.35" cy="0.3" r="0.8">
+          <stop offset="0" stopColor="#f2f2f7" />
+          <stop offset="0.6" stopColor="#a1a1aa" />
+          <stop offset="1" stopColor="#3a3a44" />
+        </radialGradient>
+        <clipPath id="clip-planet">
+          <circle cx="100" cy="100" r="42" />
+        </clipPath>
+        <clipPath id="clip-back">
+          <rect x="-40" y="-40" width="280" height="140" />
+        </clipPath>
+        <clipPath id="clip-front">
+          <rect x="-40" y="100" width="280" height="140" />
+        </clipPath>
+        <clipPath id="clip-annulus">
+          <path d={`${ellipse(RING_OUT)} ${ellipse(RING_IN)}`} clipRule="evenodd" />
+        </clipPath>
+      </defs>
+
       <g className={`scene scene-${state}`}>
-        {/* ground line */}
-        <line
-          className="ground"
-          x1="10"
-          y1="158"
-          x2="190"
-          y2="158"
-          stroke="#d2d2d7"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeDasharray="2 5"
-        />
+        <circle className="glow" cx="100" cy="100" r="90" fill="url(#glow-grad)" />
 
-        {/* parallax stars */}
-        <g className="fx" fill="#1d1d1f">
-          <circle className="star" cx="28"  cy="0" r="1.8" opacity="0.55" />
-          <circle className="star" cx="172" cy="0" r="1.5" opacity="0.5"  style={{ animationDelay: "0.4s" }} />
-          <circle className="star" cx="55"  cy="0" r="1.2" opacity="0.45" style={{ animationDelay: "1.2s" }} />
-          <circle className="star" cx="150" cy="0" r="2"   opacity="0.55" style={{ animationDelay: "0.7s" }} />
-          <circle className="star" cx="185" cy="0" r="1.4" opacity="0.45" style={{ animationDelay: "1.7s" }} />
-          <circle className="star" cx="18"  cy="0" r="1.6" opacity="0.5"  style={{ animationDelay: "0.2s" }} />
-          <circle className="star" cx="92"  cy="0" r="1.2" opacity="0.4"  style={{ animationDelay: "1.9s" }} />
-        </g>
+        <g className="body">
+          <MoonHalf half="back" on={on} />
+          <RingHalf half="back" />
 
-        {/* exhaust smoke puffs */}
-        <g className="fx" fill="#d2d2d7">
-          <circle className="puff" cx="92"  cy="148" r="4"   style={{ "--dx": "-12px" } as CSSProperties} />
-          <circle className="puff" cx="108" cy="148" r="4"   style={{ "--dx": "12px",  animationDelay: "0.5s" } as CSSProperties} />
-          <circle className="puff" cx="100" cy="152" r="3.5" style={{ "--dx": "0px",   animationDelay: "1s" } as CSSProperties} />
-        </g>
-
-        {/* rocket — bobs as a whole when assembled */}
-        <g className="bob">
-          {/* flame trail */}
-          <g className="fx">
-            <path className="flame-a" d="M82 140 L100 175 L118 140 Z" fill="#d2d2d7" />
-            <path className="flame-b" d="M89 140 L100 162 L111 140 Z" fill="#86868b" />
+          <g className="planet">
+            <circle cx="100" cy="100" r="42" fill="url(#planet-grad)" />
+            <g clipPath="url(#clip-planet)">
+              <g transform={`rotate(${TILT} 100 100)`}>
+                {/* faint cloud bands parallel to the rings */}
+                <g fill="#ffffff">
+                  <ellipse cx="100" cy="80" rx="60" ry="3" opacity="0.08" />
+                  <ellipse cx="100" cy="92" rx="60" ry="5" opacity="0.06" />
+                  <ellipse cx="100" cy="106" rx="60" ry="2.5" opacity="0.09" />
+                </g>
+                {/* the rings' shadow on the planet, cast just below them */}
+                <path d={arc(70, "front", 9)} stroke="#05060f" strokeWidth="15" strokeOpacity="0.3" fill="none" />
+              </g>
+              <circle cx="100" cy="100" r="42" fill="url(#shade-grad)" />
+            </g>
+            <circle cx="100" cy="100" r="42" fill="url(#rim-grad)" />
           </g>
 
-          {/* 46 lego cells */}
-          {BLOCKS.map((b, i) => (
-            <rect
-              key={i}
-              className="block"
-              x={b.x}
-              y={b.y}
-              width={CELL}
-              height={CELL}
-              fill={b.fill}
-              stroke="#1d1d1f"
-              strokeWidth="0.5"
-              strokeOpacity="0.85"
-              style={
-                {
-                  "--sx": `${b.sx}px`,
-                  "--sy": `${b.sy}px`,
-                  "--sr": `${b.sr}deg`,
-                } as CSSProperties
-              }
-            />
-          ))}
+          <RingHalf half="front" />
+          <MoonHalf half="front" on={on} />
         </g>
       </g>
     </svg>
