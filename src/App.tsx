@@ -36,9 +36,11 @@ function loadSelectedNodeId(): string {
 
 const POLL_MS = 1000;
 const PING_DELAYS_MS = [1000, 3000, 5000, 7000];
-const PING_URL = "https://www.gstatic.com/generate_204";
 // xray running locally doesn't prove the remote server is reachable, so we
 // fall back to consecutive ping failures as the real connectivity signal.
+// The ping runs in the backend through xray's inbound to a host routing pins
+// to the node — a WebView fetch could go direct (www.gstatic.com resolves to
+// CN IPs and hits the geoip:cn direct rule) or reuse a stale connection.
 const PING_FAIL_THRESHOLD = 3;
 
 interface Copy {
@@ -47,8 +49,10 @@ interface Copy {
 }
 
 function latencyTier(ms: number): "fast" | "ok" | "slow" {
-  if (ms < 200) return "fast";
-  if (ms < 400) return "ok";
+  // Real delay: includes dialing the node on a fresh connection, so it runs
+  // higher than a plain RTT.
+  if (ms < 300) return "fast";
+  if (ms < 800) return "ok";
   return "slow";
 }
 
@@ -101,38 +105,28 @@ export default function App() {
     };
   }, []);
 
-  // ping for latency once connected — schedule 1s, 3s, 5s, then steady 7s
+  // ping for latency once connected — schedule 1s, 3s, 5s, then steady 7s.
+  // Keyed on the node too: switching nodes can stay "Connected" across the
+  // 1s status poll, and the old node's numbers must not carry over.
   useEffect(() => {
-    if (status.kind !== "Connected") {
-      setLatency(null);
-      setPingFails(0);
-      return;
-    }
+    setLatency(null);
+    setPingFails(0);
+    if (status.kind !== "Connected") return;
     let cancelled = false;
     let timeoutId: number | null = null;
     let i = 0;
 
     const ping = async () => {
-      const ctrl = new AbortController();
-      const t = window.setTimeout(() => ctrl.abort(), 5000);
-      const start = performance.now();
       try {
-        await fetch(PING_URL, {
-          method: "GET",
-          mode: "no-cors",
-          cache: "no-store",
-          signal: ctrl.signal,
-        });
+        const ms = await api.probeLatency();
         if (cancelled) return;
-        setLatency(Math.round(performance.now() - start));
+        setLatency(ms);
         setPingFails(0);
       } catch {
         if (!cancelled) {
           setLatency(null);
           setPingFails((n) => n + 1);
         }
-      } finally {
-        window.clearTimeout(t);
       }
     };
 
@@ -150,7 +144,7 @@ export default function App() {
       cancelled = true;
       if (timeoutId != null) window.clearTimeout(timeoutId);
     };
-  }, [status.kind]);
+  }, [status.kind, selectedNodeId]);
 
   const onConnect = async () => {
     setError(null);

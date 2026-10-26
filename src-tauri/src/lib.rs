@@ -24,6 +24,7 @@ pub fn run() {
             commands::disconnect,
             commands::get_status,
             commands::get_logs,
+            commands::probe_latency,
             commands::env_check,
         ])
         .run(tauri::generate_context!())

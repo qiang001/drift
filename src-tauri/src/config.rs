@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 
 pub const SOCKS_PORT: u16 = 10808;
 pub const HTTP_PORT: u16 = 10809;
+/// Latency probe target. Pinned to the proxy outbound by a routing rule so a
+/// successful probe proves the remote node actually carries traffic.
+pub const PROBE_HOST: &str = "cp.cloudflare.com";
 
 /// Build a complete Xray config (as JSON Value) from a parsed VLESS link.
 /// Inbounds: SOCKS on 10808 + HTTP on 10809, both bound to 127.0.0.1.
@@ -61,6 +64,9 @@ pub fn build(link: &VlessLink) -> Value {
                 // Block bittorrent on the proxied side — cheap defense against
                 // a single user saturating the node.
                 { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" },
+                // The latency probe must never go direct: a probe answered via
+                // the direct path reports a healthy latency for a dead node.
+                { "type": "field", "domain": [format!("full:{PROBE_HOST}")], "outboundTag": "proxy" },
                 // CN apps (DingTalk, WeChat, Alipay, etc.) blocklist non-CN IPs
                 // for risk control. Route them direct so they see the user's
                 // real CN IP and behave normally.

@@ -1,4 +1,4 @@
-use crate::config::{HTTP_PORT, SOCKS_PORT};
+use crate::config::{HTTP_PORT, PROBE_HOST, SOCKS_PORT};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -7,8 +7,9 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -272,6 +273,47 @@ impl Drop for XrayHandle {
             let _ = tx.send(());
         }
     }
+}
+
+/// Measure real latency: one HTTP request through our own HTTP inbound to
+/// PROBE_HOST, which routing pins to the proxy outbound. A fresh connection
+/// each time, so the number includes xray dialing the node (the "real delay"
+/// other clients report) and a dead node fails instead of riding a stale
+/// keep-alive or the direct path.
+pub async fn probe_latency(timeout: Duration) -> Result<u32> {
+    let start = Instant::now();
+    let run = async {
+        let mut s = TcpStream::connect(("127.0.0.1", HTTP_PORT))
+            .await
+            .context("connect local inbound")?;
+        let req = format!(
+            "GET http://{PROBE_HOST}/generate_204 HTTP/1.1\r\n\
+             Host: {PROBE_HOST}\r\n\
+             Connection: close\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await?;
+
+        // Only the status line matters: "HTTP/1.1 204 ...".
+        let mut buf = Vec::with_capacity(64);
+        let mut chunk = [0u8; 64];
+        while !buf.contains(&b'\n') {
+            let n = s.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(anyhow!("connection closed by xray (node unreachable?)"));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        let head = String::from_utf8_lossy(&buf);
+        let line = head.lines().next().unwrap_or("");
+        match line.split_whitespace().nth(1) {
+            Some("204") | Some("200") => Ok(()),
+            _ => Err(anyhow!("unexpected probe response: {line}")),
+        }
+    };
+    tokio::time::timeout(timeout, run)
+        .await
+        .map_err(|_| anyhow!("probe timed out"))??;
+    Ok(start.elapsed().as_millis() as u32)
 }
 
 pub fn write_config(path: &PathBuf, value: &serde_json::Value) -> Result<()> {

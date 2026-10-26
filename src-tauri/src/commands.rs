@@ -125,6 +125,16 @@ pub fn get_status(state: State<'_, AppState>) -> Status {
 }
 
 #[tauri::command]
+pub async fn probe_latency(state: State<'_, AppState>) -> Result<u32, String> {
+    if state.xray_state.current_status() != Status::Connected {
+        return Err("not connected".into());
+    }
+    xray::probe_latency(std::time::Duration::from_secs(5))
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
 pub fn get_logs(state: State<'_, AppState>) -> Vec<String> {
     state.xray_state.snapshot_logs()
 }
