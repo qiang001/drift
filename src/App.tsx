@@ -18,7 +18,7 @@ const NODES: Node[] = [
   {
     id: "la",
     name: "洛杉矶",
-    url: "vless://2fa33092-13e1-4291-aebd-6cafba69d29d@103.91.219.62:443?type=tcp&encryption=none&security=reality&support-x25519mlkem768=true&pbk=j4w3ZIJzBk3z6Gtzq78FfcVEzo_MeRJsQHrlwxNMnlc&fp=chrome&sni=intel.com&sid=f4f3b42b&spx=%2Fd144496a67101f5",
+    url: "vless://2fa33092-13e1-4291-aebd-6cafba69d29d@103.91.219.62:443?type=tcp&encryption=none&security=reality&support-x25519mlkem768=true&pbk=j4w3ZIJzBk3z6Gtzq78FfcVEzo_MeRJsQHrlwxNMnlc&fp=chrome&sni=it.nvidia.com&sid=f4f3b42b&spx=%2Fd144496a67101f5",
   },
 ];
 
