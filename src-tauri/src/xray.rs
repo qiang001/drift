@@ -394,6 +394,26 @@ pub async fn probe_latency(timeout: Duration) -> Result<u32> {
     Ok(start.elapsed().as_millis() as u32)
 }
 
+/// Network round-trip to the node: time of a direct TCP handshake to
+/// host:port, the figure ping and most clients show. DNS is resolved before
+/// the clock starts. Says nothing about whether the tunnel works — pair it
+/// with `probe_latency` for that.
+pub async fn tcp_rtt(host: &str, port: u16, timeout: Duration) -> Result<u32> {
+    let run = async {
+        let addr = tokio::net::lookup_host((host, port))
+            .await
+            .context("resolve node")?
+            .next()
+            .ok_or_else(|| anyhow!("node resolved to no address"))?;
+        let start = Instant::now();
+        TcpStream::connect(addr).await.context("connect node")?;
+        Ok::<_, anyhow::Error>(start.elapsed().as_millis() as u32)
+    };
+    tokio::time::timeout(timeout, run)
+        .await
+        .map_err(|_| anyhow!("tcp ping timed out"))?
+}
+
 pub fn write_config(path: &PathBuf, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();

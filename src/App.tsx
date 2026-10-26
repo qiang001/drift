@@ -41,6 +41,8 @@ const PING_DELAYS_MS = [1000, 3000, 5000, 7000];
 // The ping runs in the backend through xray's inbound to a host routing pins
 // to the node — a WebView fetch could go direct (www.gstatic.com resolves to
 // CN IPs and hits the geoip:cn direct rule) or reuse a stale connection.
+// The number it returns is the plain round-trip to the node, not the tunnel
+// probe's multi-RTT handshake time.
 const PING_FAIL_THRESHOLD = 3;
 
 interface Copy {
@@ -49,10 +51,8 @@ interface Copy {
 }
 
 function latencyTier(ms: number): "fast" | "ok" | "slow" {
-  // Real delay: includes dialing the node on a fresh connection, so it runs
-  // higher than a plain RTT.
-  if (ms < 300) return "fast";
-  if (ms < 800) return "ok";
+  if (ms < 200) return "fast";
+  if (ms < 400) return "ok";
   return "slow";
 }
 

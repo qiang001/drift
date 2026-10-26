@@ -11,6 +11,8 @@ pub struct AppState {
     pub paths: Paths,
     pub xray: Mutex<Option<XrayHandle>>,
     pub proxy: Mutex<Option<ProxyGuard>>,
+    /// host:port of the connected node, for the latency display.
+    pub node: Mutex<Option<(String, u16)>>,
     pub xray_state: XrayState,
 }
 
@@ -20,6 +22,7 @@ impl AppState {
             paths,
             xray: Mutex::new(None),
             proxy: Mutex::new(None),
+            node: Mutex::new(None),
             xray_state: XrayState::new(),
         }
     }
@@ -86,6 +89,7 @@ pub async fn connect(
         msg
     })?;
     *state.proxy.lock() = Some(guard);
+    *state.node.lock() = Some((link.host.clone(), link.port));
 
     Ok(ConnectionInfo {
         status: state.xray_state.current_status(),
@@ -110,6 +114,7 @@ async fn inner_disconnect(state: &State<'_, AppState>) {
     if let Some(h) = handle {
         h.stop().await;
     }
+    *state.node.lock() = None;
     state.xray_state.set_status(Status::Disconnected);
 }
 
@@ -124,14 +129,28 @@ pub fn get_status(state: State<'_, AppState>) -> Status {
     state.xray_state.current_status()
 }
 
+/// Latency shown in the UI. Success means the tunnel really carries traffic
+/// (a request through xray to the node); the number is the plain network
+/// round-trip to the node, since the tunnel probe's ~3 RTTs of handshake read
+/// as "slow" on a healthy long-haul link.
 #[tauri::command]
 pub async fn probe_latency(state: State<'_, AppState>) -> Result<u32, String> {
     if state.xray_state.current_status() != Status::Connected {
         return Err("not connected".into());
     }
-    xray::probe_latency(std::time::Duration::from_secs(5))
-        .await
-        .map_err(err)
+    let node = state.node.lock().clone();
+    let Some((host, port)) = node else {
+        return Err("not connected".into());
+    };
+    let timeout = std::time::Duration::from_secs(5);
+    let (real, rtt) = tokio::join!(
+        xray::probe_latency(timeout),
+        xray::tcp_rtt(&host, port, timeout)
+    );
+    let real = real.map_err(err)?;
+    // The tunnel works but a direct handshake didn't go through: rare, and
+    // the real-delay figure still beats showing nothing.
+    Ok(rtt.unwrap_or(real))
 }
 
 #[tauri::command]
